@@ -147,7 +147,9 @@ const Wrapper = styled.div`
           border-right: solid 1px ${(props) => props.theme.border.border0};
 
           &:nth-child(1),
-          &:nth-child(2) {
+          &:nth-child(2),
+          &:nth-child(4),
+          &:nth-child(5) {
             vertical-align: middle;
           }
 

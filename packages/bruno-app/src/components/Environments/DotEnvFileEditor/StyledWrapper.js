@@ -124,6 +124,7 @@ const StyledWrapper = styled.div`
 
           &:last-child {
             border-right: none;
+            vertical-align: middle;
           }
         }
       }
