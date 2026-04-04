@@ -16,21 +16,38 @@ import { Tooltip } from 'react-tooltip';
 import { getGlobalEnvironmentVariables } from 'utils/collections';
 import { stripEnvVarUid } from 'utils/environments';
 
-const MIN_H = 35 * 2;
 const MIN_COLUMN_WIDTH = 80;
 
-const TableRow = React.memo(
-  ({ children, item }) => (
-    <tr key={item.uid} data-testid={`env-var-row-${item.name}`}>
-      {children}
-    </tr>
-  ),
-  (prevProps, nextProps) => {
-    const prevUid = prevProps?.item?.uid;
-    const nextUid = nextProps?.item?.uid;
-    return prevUid === nextUid && prevProps.children === nextProps.children;
-  }
+/** Must match checkbox + name + value + secret + delete columns */
+const ENV_VARS_TABLE_COL_COUNT = 5;
+
+const EnvVarsFillerRow = ({ height }) => (
+  <tr aria-hidden="true">
+    <td
+      colSpan={ENV_VARS_TABLE_COL_COUNT}
+      style={{
+        height,
+        padding: 0,
+        border: 0,
+        verticalAlign: 'top',
+        lineHeight: 0
+      }}
+    />
+  </tr>
 );
+
+const TableRowInner = React.forwardRef(({ children, item, ...rest }, ref) => (
+  <tr ref={ref} {...rest} data-testid={`env-var-row-${item.name}`}>
+    {children}
+  </tr>
+));
+TableRowInner.displayName = 'TableRowInner';
+
+// Do not use a custom memo comparator: Virtuoso updates data-index / style / ref on rows;
+// skipping those re-rendos drops attributes and breaks tbody row targeting CSS.
+const TableRow = React.memo(TableRowInner);
+
+const ENV_VARS_VIRTUOSO_COMPONENTS = { TableRow, FillerRow: EnvVarsFillerRow };
 
 const EnvironmentVariablesTable = ({
   environment,
@@ -52,8 +69,6 @@ const EnvironmentVariablesTable = ({
 
   const hasDraftForThisEnv = draft?.environmentUid === environment.uid;
 
-  const [tableHeight, setTableHeight] = useState(MIN_H);
-
   // Use environment UID as part of tableId so each environment has its own column widths
   const tableId = `env-vars-table-${environment.uid}`;
 
@@ -69,57 +84,58 @@ const EnvironmentVariablesTable = ({
   const [resizing, setResizing] = useState(null);
   const [pinnedData, setPinnedData] = useState({ query: '', uids: new Set() });
 
-  const handleColumnWidthsChange = (id, widths) => {
-    dispatch(updateTableColumnWidths({ uid: activeTabUid, tableId: id, widths }));
-  };
-
   // Store column widths in ref for access in event handlers
   const columnWidthsRef = useRef(columnWidths);
   columnWidthsRef.current = columnWidths;
 
-  const handleResizeStart = useCallback((e, columnKey) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleColumnWidthsChange = useCallback(
+    (id, widths) => {
+      dispatch(updateTableColumnWidths({ uid: activeTabUid, tableId: id, widths }));
+    },
+    [activeTabUid, dispatch]
+  );
 
-    const currentCell = e.target.closest('td');
-    const nextCell = currentCell?.nextElementSibling;
-    if (!currentCell || !nextCell) return;
+  const handleResizeStart = useCallback(
+    (e, columnKey) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    const startX = e.clientX;
-    const startWidth = currentCell.offsetWidth;
-    const nextColumnKey = 'value';
-    const nextColumnStartWidth = nextCell.offsetWidth;
+      const currentCell = e.target.closest('td');
+      const nextCell = currentCell?.nextElementSibling;
+      if (!currentCell || !nextCell) return;
 
-    setResizing(columnKey);
+      const startX = e.clientX;
+      const startWidth = currentCell.offsetWidth;
+      const nextColumnKey = 'value';
+      const nextColumnStartWidth = nextCell.offsetWidth;
 
-    const handleMouseMove = (moveEvent) => {
-      const diff = moveEvent.clientX - startX;
-      const maxGrow = nextColumnStartWidth - MIN_COLUMN_WIDTH;
-      const maxShrink = startWidth - MIN_COLUMN_WIDTH;
-      const clampedDiff = Math.max(-maxShrink, Math.min(maxGrow, diff));
+      setResizing(columnKey);
 
-      const newWidths = {
-        [columnKey]: `${startWidth + clampedDiff}px`,
-        [nextColumnKey]: `${nextColumnStartWidth - clampedDiff}px`
+      const handleMouseMove = (moveEvent) => {
+        const diff = moveEvent.clientX - startX;
+        const maxGrow = nextColumnStartWidth - MIN_COLUMN_WIDTH;
+        const maxShrink = startWidth - MIN_COLUMN_WIDTH;
+        const clampedDiff = Math.max(-maxShrink, Math.min(maxGrow, diff));
+
+        const newWidths = {
+          [columnKey]: `${startWidth + clampedDiff}px`,
+          [nextColumnKey]: `${nextColumnStartWidth - clampedDiff}px`
+        };
+        setColumnWidths(newWidths);
       };
-      setColumnWidths(newWidths);
-    };
 
-    const handleMouseUp = () => {
-      setResizing(null);
-      // Save to Redux after resize ends using ref for latest values
-      handleColumnWidthsChange(tableId, columnWidthsRef.current);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
+      const handleMouseUp = () => {
+        setResizing(null);
+        handleColumnWidthsChange(tableId, columnWidthsRef.current);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  }, [handleColumnWidthsChange]);
-
-  const handleTotalHeightChanged = useCallback((h) => {
-    setTableHeight(h);
-  }, []);
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    },
+    [handleColumnWidthsChange, tableId]
+  );
 
   const handleRowFocus = useCallback((uid) => {
     setPinnedData((prev) => ({
@@ -467,138 +483,137 @@ const EnvironmentVariablesTable = ({
 
   return (
     <StyledWrapper className={resizing ? 'is-resizing' : ''}>
-      {isSearchActive && filteredVariables.length === 0 ? (
-        <div className="no-results">No results found for &ldquo;{searchQuery.trim()}&rdquo;</div>
-      ) : (
-        <TableVirtuoso
-          className="table-container"
-          style={{ height: tableHeight }}
-          components={{ TableRow }}
-          data={filteredVariables}
-          totalListHeightChanged={handleTotalHeightChanged}
-          fixedHeaderContent={() => (
-            <tr>
-              <td className="text-center"></td>
-              <td style={{ width: columnWidths.name }}>
-                Name
-                <div
-                  className={`resize-handle ${resizing === 'name' ? 'resizing' : ''}`}
-                  style={{ height: tableHeight > 0 ? `${tableHeight}px` : undefined }}
-                  onMouseDown={(e) => handleResizeStart(e, 'name')}
-                />
-              </td>
-              <td style={{ width: columnWidths.value }}>Value</td>
-              <td className="text-center">Secret</td>
-              <td></td>
-            </tr>
-          )}
-          fixedItemHeight={35}
-          computeItemKey={(virtualIndex, item) => `${environment.uid}-${item.index}`}
-          itemContent={(virtualIndex, { variable, index: actualIndex }) => {
-            const isLastRow = actualIndex === formik.values.length - 1;
-            const isEmptyRow = !variable.name || variable.name.trim() === '';
-            const isLastEmptyRow = isLastRow && isEmptyRow;
-
-            return (
-              <>
-                <td className="text-center">
-                  {!isLastEmptyRow && (
-                    <input
-                      type="checkbox"
-                      className="mousetrap"
-                      name={`${actualIndex}.enabled`}
-                      checked={variable.enabled}
-                      onChange={formik.handleChange}
-                    />
-                  )}
-                </td>
+      <div className="table-scroll-area">
+        {isSearchActive && filteredVariables.length === 0 ? (
+          <div className="no-results">No results found for &ldquo;{searchQuery.trim()}&rdquo;</div>
+        ) : (
+          <TableVirtuoso
+            className="table-container"
+            components={ENV_VARS_VIRTUOSO_COMPONENTS}
+            data={filteredVariables}
+            increaseViewportBy={200}
+            fixedHeaderContent={() => (
+              <tr>
+                <td className="text-center"></td>
                 <td style={{ width: columnWidths.name }}>
-                  <div className="flex items-center">
-                    <div className="name-cell-wrapper">
-                      <input
-                        type="text"
-                        autoComplete="off"
-                        autoCorrect="off"
-                        autoCapitalize="off"
-                        spellCheck="false"
-                        className="mousetrap"
-                        id={`${actualIndex}.name`}
-                        name={`${actualIndex}.name`}
-                        value={variable.name}
-                        placeholder={!variable.value || (typeof variable.value === 'string' && variable.value.trim() === '') ? 'Name' : ''}
-                        onChange={(e) => handleNameChange(actualIndex, e)}
-                        onFocus={() => handleRowFocus(variable.uid)}
-                        onBlur={() => {
-                          handleNameBlur(actualIndex);
-                        }}
-                        onKeyDown={(e) => handleNameKeyDown(actualIndex, e)}
-                      />
-                    </div>
-                    <ErrorMessage name={`${actualIndex}.name`} index={actualIndex} />
-                  </div>
-                </td>
-                <td
-                  className="flex flex-row flex-nowrap items-center"
-                  style={{ width: columnWidths.value }}
-                >
+                  Name
                   <div
-                    className="overflow-hidden grow w-full relative"
-                    onFocus={() => handleRowFocus(variable.uid)}
-                  >
-                    <MultiLineEditor
-                      theme={storedTheme}
-                      collection={_collection}
-                      name={`${actualIndex}.value`}
-                      value={variable.value}
-                      placeholder={isLastEmptyRow ? 'Value' : ''}
-                      isSecret={variable.secret}
-                      readOnly={typeof variable.value !== 'string'}
-                      onChange={(newValue) => {
-                        formik.setFieldValue(`${actualIndex}.value`, newValue, true);
-                        // Clear ephemeral metadata when user manually edits the value
-                        if (variable.ephemeral) {
-                          formik.setFieldValue(`${actualIndex}.ephemeral`, undefined, false);
-                          formik.setFieldValue(`${actualIndex}.persistedValue`, undefined, false);
-                        }
-                      }}
-                      onSave={handleSave}
-                    />
-                  </div>
-                  {typeof variable.value !== 'string' && (
-                    <span className="ml-2 flex items-center">
-                      <IconInfoCircle id={`${variable.uid}-disabled-info-icon`} className="text-muted" size={16} />
-                      <Tooltip
-                        anchorId={`${variable.uid}-disabled-info-icon`}
-                        content="Non-string values set via scripts are read-only and can only be updated through scripts."
-                        place="top"
+                    className={`resize-handle ${resizing === 'name' ? 'resizing' : ''}`}
+                    onMouseDown={(e) => handleResizeStart(e, 'name')}
+                  />
+                </td>
+                <td style={{ width: columnWidths.value }}>Value</td>
+                <td className="text-center">Secret</td>
+                <td></td>
+              </tr>
+            )}
+            defaultItemHeight={35}
+            computeItemKey={(virtualIndex, item) => `${environment.uid}-${item.index}`}
+            itemContent={(virtualIndex, { variable, index: actualIndex }) => {
+              const isLastRow = actualIndex === formik.values.length - 1;
+              const isEmptyRow = !variable.name || variable.name.trim() === '';
+              const isLastEmptyRow = isLastRow && isEmptyRow;
+
+              return (
+                <>
+                  <td className="text-center">
+                    {!isLastEmptyRow && (
+                      <input
+                        type="checkbox"
+                        className="mousetrap"
+                        name={`${actualIndex}.enabled`}
+                        checked={variable.enabled}
+                        onChange={formik.handleChange}
                       />
-                    </span>
-                  )}
-                  {renderExtraValueContent && renderExtraValueContent(variable)}
-                </td>
-                <td className="text-center">
-                  {!isLastEmptyRow && (
-                    <input
-                      type="checkbox"
-                      className="mousetrap"
-                      name={`${actualIndex}.secret`}
-                      checked={variable.secret}
-                      onChange={formik.handleChange}
-                    />
-                  )}
-                </td>
-                <td>
-                  {!isLastEmptyRow && (
-                    <button onClick={() => handleRemoveVar(variable.uid)}>
-                      <IconTrash strokeWidth={1.5} size={18} />
-                    </button>
-                  )}
-                </td>
-              </>
-            );
-          }}
-        />
-      )}
+                    )}
+                  </td>
+                  <td style={{ width: columnWidths.name }}>
+                    <div className="flex items-center">
+                      <div className="name-cell-wrapper">
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          spellCheck="false"
+                          className="mousetrap"
+                          id={`${actualIndex}.name`}
+                          name={`${actualIndex}.name`}
+                          value={variable.name}
+                          placeholder={!variable.value || (typeof variable.value === 'string' && variable.value.trim() === '') ? 'Name' : ''}
+                          onChange={(e) => handleNameChange(actualIndex, e)}
+                          onFocus={() => handleRowFocus(variable.uid)}
+                          onBlur={() => {
+                            handleNameBlur(actualIndex);
+                          }}
+                          onKeyDown={(e) => handleNameKeyDown(actualIndex, e)}
+                        />
+                      </div>
+                      <ErrorMessage name={`${actualIndex}.name`} index={actualIndex} />
+                    </div>
+                  </td>
+                  <td style={{ width: columnWidths.value }}>
+                    <div className="flex flex-row flex-nowrap items-start gap-1 min-w-0 w-full">
+                      <div
+                        className="overflow-hidden min-w-0 min-h-0 flex-1 self-start relative w-full"
+                        onFocus={() => handleRowFocus(variable.uid)}
+                      >
+                        <MultiLineEditor
+                          theme={storedTheme}
+                          collection={_collection}
+                          name={`${actualIndex}.value`}
+                          value={variable.value}
+                          placeholder={isLastEmptyRow ? 'Value' : ''}
+                          isSecret={variable.secret}
+                          readOnly={typeof variable.value !== 'string'}
+                          onChange={(newValue) => {
+                            formik.setFieldValue(`${actualIndex}.value`, newValue, true);
+                            // Clear ephemeral metadata when user manually edits the value
+                            if (variable.ephemeral) {
+                              formik.setFieldValue(`${actualIndex}.ephemeral`, undefined, false);
+                              formik.setFieldValue(`${actualIndex}.persistedValue`, undefined, false);
+                            }
+                          }}
+                          onSave={handleSave}
+                        />
+                      </div>
+                      {typeof variable.value !== 'string' && (
+                        <span className="ml-2 flex shrink-0 items-start pt-0.5">
+                          <IconInfoCircle id={`${variable.uid}-disabled-info-icon`} className="text-muted" size={16} />
+                          <Tooltip
+                            anchorId={`${variable.uid}-disabled-info-icon`}
+                            content="Non-string values set via scripts are read-only and can only be updated through scripts."
+                            place="top"
+                          />
+                        </span>
+                      )}
+                      {renderExtraValueContent && renderExtraValueContent(variable)}
+                    </div>
+                  </td>
+                  <td className="text-center">
+                    {!isLastEmptyRow && (
+                      <input
+                        type="checkbox"
+                        className="mousetrap"
+                        name={`${actualIndex}.secret`}
+                        checked={variable.secret}
+                        onChange={formik.handleChange}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    {!isLastEmptyRow && (
+                      <button onClick={() => handleRemoveVar(variable.uid)}>
+                        <IconTrash strokeWidth={1.5} size={18} />
+                      </button>
+                    )}
+                  </td>
+                </>
+              );
+            }}
+          />
+        )}
+      </div>
 
       <div className="button-container">
         <div className="flex items-center">
